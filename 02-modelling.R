@@ -1,0 +1,59 @@
+library(tidyverse)
+library(cmdstanr)
+
+if (!dir.exists("model")) dir.create("model")
+
+data_stan <- list(N = nrow(df_stan),
+                  J = length(unique(df_stan$mep_id_stan)), # this is actually MEP-group combination
+                  I = length(unique(df_stan$vote_id_stan)),
+                  jj = df_stan$mep_id_stan,
+                  ii = df_stan$vote_id_stan,
+                  y = df_stan$position_stan)
+
+model <- "// 2PL IRT MODEL
+data {
+  int<lower=1> N;                     // Number of observations
+  int<lower=1> J;                     // Number of MEPs
+  int<lower=1> I;                     // Number of indicators (votes)
+  array[N] int<lower=1, upper=J> jj;  // MEP ID for observation n
+  array[N] int<lower=1, upper=I> ii;  // Vote ID for observation n
+  array[N] int<lower=0, upper=1> y;   // Value (=position) of mep for vote n
+}
+
+parameters {
+  vector[I] alpha;            // difficulty parameter
+  vector<lower=0>[I] beta;    // discrimination parameter
+  vector[J] eta;              // latent trait/ability parameter
+  real mu_alpha;
+  real<lower=0> sigma_alpha;
+  real<lower=0> sigma_beta;
+}
+
+model {
+  // priors
+  alpha ~ normal(mu_alpha, sigma_alpha);
+  beta ~ lognormal(0, sigma_beta);
+  eta ~ normal(0, 1);
+  sigma_alpha ~ student_t(3, 0, 1);
+  sigma_beta ~ student_t(3, 0, 1);
+  mu_alpha ~ student_t(3, 0, 1);
+  
+  // likelihood
+  y ~ bernoulli_logit(beta[ii] .* (eta[jj] - alpha[ii]));
+}
+"
+write(model, "model/twopl_irt_model.stan")
+compiled_model <- cmdstan_model("model/twopl_irt_model.stan")
+
+fit <- compiled_model$sample(
+  data = data_stan,
+  parallel_chains = 4,
+  chains = 4,
+  iter_warmup = 3000,
+  iter_sampling = 2000,
+  refresh = 50,
+  output_dir = "model",
+  output_basename = "twopl_irt_model"
+)
+
+saveRDS(fit, "model/fit.rds")
